@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""
-sitecustomize.py for two-phase vLLM profiling.
-
-This version contains two independent patches:
-  1) Scheduler-side first main batch hold.
-     - This is enabled even when VLLM_DISABLE_GPU_PROFILE_PATCH=1.
-     - It prevents gpu_pair0/active_pair0 from entering the scheduler queue
-       alone before pair1/pair2 arrive.
-  2) GPUModelRunner.execute_model timing/attribution patch.
-     - This is disabled only when VLLM_DISABLE_GPU_PROFILE_PATCH=1.
-"""
 
 import csv
 import os
@@ -294,7 +283,6 @@ def _patch_scheduler_min_batch_hold():
                 if not buf:
                     return
                 elapsed = _elapsed_ms(st)
-                # Close before replaying to avoid recursively holding the replayed requests.
                 st["closed"] = True
                 st["buffer"] = []
                 st["flush_count"] = int(st.get("flush_count", 0)) + 1
@@ -398,11 +386,6 @@ def _patch_scheduler_min_batch_hold():
 
 
 def _extract_request_ids_and_scheduled_tokens(scheduler_output):
-    """
-    실제 scheduled된 request만 attribution 대상으로 사용합니다.
-    finished_req_ids는 종료 bookkeeping에 가까운 경우가 있으므로
-    GPU time attribution에 사용하지 않습니다.
-    """
     ids = set()
     token_map = {}
 
