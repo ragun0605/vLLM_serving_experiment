@@ -1,24 +1,4 @@
 #!/usr/bin/env python3
-"""
-Run a scheduler-hold-compatible contention-focused vLLM experiment.
-
-This runner keeps the same scheduler hold / min-batch environment as
-run5_scheduler_hold.py, but executes only the active phase and outputs the
-runnable/active thread identities observed during contention-suspicious
-engine.step() calls.
-
-Main outputs:
-  BASE_PROFILE_DIR/contention_runnable_thread_details.csv
-  BASE_PROFILE_DIR/contention_runnable_thread_summary_by_tid.csv
-  BASE_PROFILE_DIR/contention_runnable_thread_summary_by_type.csv
-
-Use with:
-  export VLLM_PHASE_WORKER=./phase_worker_scheduler_hold_runnable_thread_identity.py
-  export VLLM_CPUSET=0-3
-  export VLLM_CONTENTION_CORE_COUNT=4
-  python run5_scheduler_hold_contention_identity.py
-"""
-
 import os
 import shutil
 import subprocess
@@ -32,10 +12,7 @@ import pandas as pd
 BASE_PROFILE_DIR = Path(os.environ.get("VLLM_BASE_PROFILE_DIR", "./scheduler_hold_runnable_thread_identity_logs"))
 WORKER_SCRIPT = Path(os.environ.get("VLLM_PHASE_WORKER", "./phase_worker_scheduler_hold_runnable_thread_identity.py")).resolve()
 
-# The scheduler-hold patch must be importable as a module named sitecustomize.
-# This runner copies sitecustomize_scheduler_hold_v2.py into a private import
-# directory as sitecustomize.py and prepends that directory to PYTHONPATH, so
-# it does not depend on manually renaming the uploaded file.
+
 SITECUSTOMIZE_SOURCE = Path(
     os.environ.get("VLLM_SCHEDULER_HOLD_SITECUSTOMIZE", "./sitecustomize_scheduler_hold_v2.py")
 ).resolve()
@@ -43,12 +20,10 @@ RESET = os.environ.get("VLLM_RESET_PROFILE_FILES", "1").lower() not in {"0", "fa
 NUM_REPEATS = int(os.environ.get("VLLM_NUM_REPEATS", "5"))
 PROMPT_SPECS_PATH = BASE_PROFILE_DIR / "prompt_specs.json"
 
-# Save every step's runnable/active threads, not just contention-suspicious steps.
 SAVE_ALL_STEPS = os.environ.get("VLLM_CONTENTION_SAVE_ALL_STEPS", "0").lower() in {"1", "true", "yes", "on"}
 KEEP_RAW = os.environ.get("VLLM_KEEP_CONTENTION_RAW", "0").lower() in {"1", "true", "yes", "on"}
 CPU_UTIL_THRESHOLD = float(os.environ.get("VLLM_CONTENTION_CPU_UTIL_THRESHOLD", "0.85"))
 
-# Match run5_scheduler_hold.py defaults unless the user overrides them.
 MIN_BATCH_BARRIER_MS = os.environ.get("VLLM_MIN_BATCH_BARRIER_MS", "0")
 MIN_BATCH_TARGET_REQUESTS = os.environ.get("VLLM_MIN_BATCH_TARGET_REQUESTS", "")
 EXCLUDE_MIN_BATCH_BARRIER_FROM_LATENCY = os.environ.get("VLLM_EXCLUDE_MIN_BATCH_BARRIER_FROM_LATENCY", "1")
@@ -97,7 +72,6 @@ def run_active_phase_subprocess(repeat_id: int, profile_dir: Path, sitecustomize
     env["VLLM_DISABLE_GPU_PROFILE_PATCH"] = "1"
     env["VLLM_TRACE_THREAD_IDENTITIES"] = "1"
 
-    # Ensure scheduler-hold settings match the base run5/phase_worker environment.
     env.setdefault("VLLM_ENABLE_SCHEDULER_MIN_BATCH_HOLD", ENABLE_SCHEDULER_MIN_BATCH_HOLD)
     env.setdefault("VLLM_MIN_BATCH_BARRIER_MS", MIN_BATCH_BARRIER_MS)
     if MIN_BATCH_TARGET_REQUESTS:
@@ -330,8 +304,6 @@ def build_thread_identity_outputs_for_repeat(repeat_id: int, repeat_dir: Path):
     if detail.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    # Restrict to contention steps by default. This retains every runnable/active
-    # thread sample inside those steps, not just top-N strings.
     event_steps = set(pd.to_numeric(events["global_step"], errors="coerce").dropna().astype(int).tolist())
     detail["global_step_num"] = pd.to_numeric(detail["global_step"], errors="coerce")
     if not SAVE_ALL_STEPS:
@@ -340,7 +312,7 @@ def build_thread_identity_outputs_for_repeat(repeat_id: int, repeat_dir: Path):
     if detail.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    # Merge concrete request/iteration location and step-level pressure metrics.
+
     merge_cols = [
         "global_step", "logical_location", "step_stage", "pair_ids_in_step",
         "decode_iter_min", "decode_iter_max", "decode_iter_indices", "request_location_detail",
@@ -364,7 +336,6 @@ def build_thread_identity_outputs_for_repeat(repeat_id: int, repeat_dir: Path):
 
     detail.insert(0, "repeat_id", repeat_id)
 
-    # Stable numeric columns.
     for c in [
         "is_runnable", "is_active_by_cpu_delta", "cpu_delta_ms_since_prev_sample",
         "involuntary_ctx_switch_delta_since_prev_sample", "voluntary_ctx_switch_delta_since_prev_sample",
@@ -373,7 +344,6 @@ def build_thread_identity_outputs_for_repeat(repeat_id: int, repeat_dir: Path):
         if c in detail.columns:
             detail[c] = pd.to_numeric(detail[c], errors="coerce").fillna(0)
 
-    # Most useful column order.
     detail_cols = [
         "repeat_id", "global_step", "sample_idx", "t_rel_ms", "logical_location", "step_stage",
         "pair_ids_in_step", "decode_iter_indices", "request_location_detail",
@@ -385,7 +355,7 @@ def build_thread_identity_outputs_for_repeat(repeat_id: int, repeat_dir: Path):
         "cpu_delta_ms_since_prev_sample", "involuntary_ctx_switch_delta_since_prev_sample",
         "voluntary_ctx_switch_delta_since_prev_sample", "wchan", "last_cpu", "reason_flags", "process_cmdline",
     ]
-    # Resolve duplicate available_cores column names after merge.
+
     if "available_cores_x" in detail.columns and "available_cores" not in detail.columns:
         detail["available_cores"] = detail["available_cores_x"]
     if "available_cores_y" in detail.columns:
@@ -395,7 +365,7 @@ def build_thread_identity_outputs_for_repeat(repeat_id: int, repeat_dir: Path):
     detail = detail[detail_cols + extra_cols]
     detail = detail.sort_values(["repeat_id", "global_step", "sample_idx", "is_runnable", "cpu_delta_ms_since_prev_sample"], ascending=[True, True, True, False, False])
 
-    # Per concrete TID summary.
+
     tid_group = [
         "repeat_id", "pid", "tid", "process_role", "process_name", "thread_name", "kernel_thread_comm", "python_thread_name",
     ]
@@ -418,7 +388,7 @@ def build_thread_identity_outputs_for_repeat(repeat_id: int, repeat_dir: Path):
     ).reset_index()
     by_tid = by_tid.sort_values(["runnable_samples", "total_cpu_delta_ms", "involuntary_ctx_switch_delta_sum"], ascending=False)
 
-    # Cross-repeat/type summary: useful because PIDs/TIDs change every repeat.
+
     type_group = ["logical_location", "process_role", "process_name", "thread_name", "kernel_thread_comm", "python_thread_name"]
     type_group = [c for c in type_group if c in detail.columns]
     by_type = detail.groupby(type_group, dropna=False).agg(
@@ -437,7 +407,7 @@ def build_thread_identity_outputs_for_repeat(repeat_id: int, repeat_dir: Path):
     ).reset_index()
     by_type = by_type.sort_values(["runnable_samples", "total_cpu_delta_ms", "involuntary_ctx_switch_delta_sum"], ascending=False)
 
-    # Per-repeat saves for quick inspection if repeat dirs are kept.
+
     detail_path = repeat_dir / "contention_runnable_thread_details.csv"
     by_tid_path = repeat_dir / "contention_runnable_thread_summary_by_tid.csv"
     detail.to_csv(detail_path, index=False)
@@ -516,7 +486,6 @@ def main():
             all_by_type.append(by_type)
 
         if not KEEP_RAW:
-            # Keep only the compact per-repeat thread identity outputs.
             keep_files = []
             keep_names = [
                 "contention_runnable_thread_details.csv",
@@ -545,8 +514,6 @@ def main():
 
     final_detail.to_csv(detail_path, index=False)
     final_by_tid.to_csv(by_tid_path, index=False)
-
-    # Re-aggregate type summary across repeats because per-repeat type summaries are partial.
     if not final_detail.empty:
         type_group = ["logical_location", "process_role", "process_name", "thread_name", "kernel_thread_comm", "python_thread_name"]
         type_group = [c for c in type_group if c in final_detail.columns]
