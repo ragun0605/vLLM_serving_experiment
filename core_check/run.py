@@ -50,18 +50,13 @@ SCHEDULER_MIN_BATCH_TARGET_REQUESTS = os.environ.get(
     os.environ.get("VLLM_MIN_BATCH_TARGET_REQUESTS", ""),
 )
 
-# 중요:
-# 반복 실험에서는 prompt를 매번 새로 만들지 않고,
-# 같은 prompt_specs.json을 모든 repeat에서 공유한다.
-# 그래야 prompt random 차이가 아니라 core 제한 / scheduler jitter / runtime noise를 볼 수 있다.
+
 PROMPT_SPECS_PATH = BASE_PROFILE_DIR / "prompt_specs.json"
 
 
 # ============================================================
 # Requested output columns
 # ============================================================
-# 최종 request-level CSV에서 우선적으로 볼 핵심 컬럼들.
-# 존재하지 않는 컬럼은 자동으로 제외되므로 phase_worker.py 쪽 출력 변화에도 비교적 안전하다.
 REQUEST_OUTPUT_COLUMNS = [
     # scenario / request identity
     "repeat_id",
@@ -89,7 +84,6 @@ REQUEST_OUTPUT_COLUMNS = [
     "ttft_actual_raw_including_barrier_ms_phase_b",
 
     # Phase B request-level latency
-    # ttft_ms_phase_b는 이제 실제 TTFT(submit -> first token)이다.
     "e2e_ms_phase_b",
     "queue_ms_phase_b",
     "ttft_ms_phase_b",
@@ -103,7 +97,7 @@ REQUEST_OUTPUT_COLUMNS = [
     "e2ft_request_observed_ms_phase_b",
     "tpot_request_observed_ms_phase_b",
 
-    # Prefill time: 이전 코드의 ttft_ms_phase_b에 해당하던 값
+    # Prefill time
     "prefill_time_ms_phase_b",
     "prefill_gpu_ms_phase_b",
     "prefill_non_gpu_wall_ms",
@@ -136,8 +130,6 @@ REQUEST_OUTPUT_COLUMNS = [
     "tpot_gpu_total_ms",
 
     # Stage-level active thread metrics from Phase A
-    # prefill_active_thread_count / decode_active_thread_count_avg는
-    # robust 대표값이며, edge/sample/union은 흔들림 원인 분석용 보조값이다.
     "prefill_active_thread_count",
     "prefill_active_thread_count_edge",
     "prefill_active_thread_count_sample_p90",
@@ -176,7 +168,6 @@ REQUEST_OUTPUT_COLUMNS = [
     "all_iters_have_expected_tp_rows",
 ]
 
-# 5회 시나리오 반복 요약 및 전체 평균 요약에 사용할 metric들.
 REQUEST_SUMMARY_METRICS = [
     "e2e_ms_phase_b",
     "ttft_ms_phase_b",
