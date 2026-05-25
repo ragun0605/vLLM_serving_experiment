@@ -1112,10 +1112,6 @@ def _make_logical_iter_row(req_id, logical_idx, occs):
     iter_wall_ms_max = max(float(o["iter_wall_ms"]) for o in occs)
     iter_gpu_ms_max = max(float(o["iter_gpu_ms"]) for o in occs)
 
-    # 핵심:
-    # non-GPU는 wall-max - gpu-max로 재계산하지 않고,
-    # sitecustomize.py가 같은 rank 안에서 기록한 iter_non_gpu_wall_ms의 rank별 max를 사용한다.
-    # 이렇게 해야 서로 다른 rank의 wall max와 gpu max가 섞이는 문제를 줄일 수 있다.
     iter_non_gpu_wall_ms_max = max(
         float(
             o.get(
@@ -1693,17 +1689,6 @@ def build_phase_summary(request_state, df_detail: pd.DataFrame, include_gpu: boo
                     (state["first_token_perf"] - state["submit_perf"]) * 1000.0,
                 )
 
-            # ============================================================
-            # TTFT vs Prefill time
-            # ============================================================
-            # 기존 코드에서는 phase B의 ttft_ms를 prefill logical iteration
-            # wall time으로 덮어썼다. 하지만 일반적인 TTFT는 request 제출
-            # 시점부터 첫 token이 관측되는 시점까지의 시간이다.
-            # 따라서:
-            #   - ttft_ms              := submit_perf -> first_token_perf
-            #   - prefill_time_ms      := prefill logical iteration wall time 합
-            #   - ttft_compute_window_ms := start_processing_perf -> first_token_perf
-            # 로 분리한다.
 
             prefill_time_ms = (
                 sum(float(it["iter_wall_ms_max"]) for it in gpu_prefill)
@@ -1740,29 +1725,14 @@ def build_phase_summary(request_state, df_detail: pd.DataFrame, include_gpu: boo
                 else prefill_non_gpu_wall_ms / prefill_time_ms
             )
 
-            # 실제 TTFT: request submit -> first token observed.
-            # queue delay까지 포함한다.
-            actual_ttft_ms = e2ft_request_observed_ms
-
-            # 기존 compute window도 보존한다.
-            # start_processing -> first token 이므로 queue delay는 제외된다.
-            ttft_compute_window_ms = request_observed_ttft_ms
-
-            # TTFT 구간에서 확인 가능한 GPU 기여는 첫 token 전 prefill GPU time이다.
-            ttft_gpu_ms = prefill_gpu_ms
-
-            # 실제 TTFT 기준 non-GPU time은 TTFT 전체에서 prefill GPU event time을 뺀다.
-            # 이 값에는 queue delay, scheduling, Python overhead, CPU-side model-runner overhead가 포함된다.
-            ttft_ms_for_report = actual_ttft_ms
+        
             ttft_non_gpu = (
                 None
                 if actual_ttft_ms is None or ttft_gpu_ms is None
                 else max(0.0, actual_ttft_ms - ttft_gpu_ms)
             )
 
-            # ============================================================
-            # TPOT: decode logical iteration 기준
-            # ============================================================
+            
 
             tpot_request_observed_ms = request_observed_tpot_ms
 
@@ -1805,11 +1775,6 @@ def build_phase_summary(request_state, df_detail: pd.DataFrame, include_gpu: boo
                 )
 
             tpot_ms_for_report = tpot_decode_wall_ms
-
-            # ============================================================
-            # E2E: 기존 request-level e2e와 GPU total을 함께 둔다.
-            # 추가로 iteration-derived e2e도 diagnostic으로 기록한다.
-            # ============================================================
 
             e2e_gpu_ms = (
                 sum(float(it["iter_gpu_ms_max"]) for it in logical_iters)
@@ -1869,8 +1834,6 @@ def build_phase_summary(request_state, df_detail: pd.DataFrame, include_gpu: boo
             row.update(
                 {
                     # request-level diagnostic
-                    # actual TTFT는 submit -> first token, compute window는
-                    # start_processing -> first token이다.
                     "ttft_actual_ms": fmt(actual_ttft_ms, 3),
                     "ttft_actual_raw_including_barrier_ms": fmt(raw_e2ft_ms, 3),
                     "ttft_request_observed_ms": fmt(request_observed_ttft_ms, 3),
@@ -1879,7 +1842,6 @@ def build_phase_summary(request_state, df_detail: pd.DataFrame, include_gpu: boo
                     "tpot_request_observed_ms": fmt(tpot_request_observed_ms, 6),
 
                     # Prefill iteration-derived values.
-                    # 이전 코드의 phase B ttft_ms에 해당하던 값은 이제 prefill_time_ms로 남긴다.
                     "prefill_time_ms": fmt(prefill_time_ms, 3),
                     "prefill_gpu_ms": fmt(prefill_gpu_ms, 3),
                     "prefill_non_gpu_wall_ms": fmt(prefill_non_gpu_wall_ms, 3),
@@ -1893,8 +1855,6 @@ def build_phase_summary(request_state, df_detail: pd.DataFrame, include_gpu: boo
                     ),
                     "ttft_gpu_exceeds_prefill_wall": prefill_gpu_exceeds_wall,
                     "prefill_gpu_exceeds_wall": prefill_gpu_exceeds_wall,
-
-                    # phase B의 ttft_ms는 이제 실제 TTFT 값을 사용한다.
                     "ttft_ms": fmt(ttft_ms_for_report, 3),
 
                     # TPOT iteration-derived
@@ -1906,7 +1866,6 @@ def build_phase_summary(request_state, df_detail: pd.DataFrame, include_gpu: boo
                     ),
                     "tpot_gpu_exceeds_decode_wall": tpot_gpu_exceeds_decode_wall,
 
-                    # 기존 tpot_ms 컬럼을 phase B에서는 iteration-derived 값으로 덮어씀
                     "tpot_ms": fmt(tpot_ms_for_report, 6),
 
                     # E2E diagnostic
