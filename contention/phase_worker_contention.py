@@ -70,10 +70,7 @@ SEED = int(os.environ.get("VLLM_RANDOM_SEED", "1234"))
 # ============================================================
 # Scheduler-hold / min-batch barrier compatibility
 # ============================================================
-# These defaults intentionally match the scheduler-hold experiment files.
-# The sitecustomize_scheduler_hold_v2.py patch handles scheduler-side hold
-# even when VLLM_DISABLE_GPU_PROFILE_PATCH=1. This worker keeps the same
-# driver-side barrier / latency-baseline behavior as phase_worker_scheduler_hold_fixed.py.
+
 MIN_BATCH_BARRIER_MS = float(os.environ.get("VLLM_MIN_BATCH_BARRIER_MS", "0"))
 MIN_BATCH_TARGET_REQUESTS = int(
     os.environ.get("VLLM_MIN_BATCH_TARGET_REQUESTS", str(NUM_REQUESTS))
@@ -90,22 +87,14 @@ RESET_LATENCY_BASELINE_AFTER_ADD_LOOP = os.environ.get(
 # CPU contention tracing config
 # ============================================================
 
-# Optional: restrict this worker process (and child vLLM workers) to a CPU set.
-# Example: export VLLM_CPUSET=0-3 or VLLM_CPUSET=0,1,2,3
+
 CPUSET_ENV = os.environ.get("VLLM_CPUSET", "").strip()
 
-# If set, this overrides the denominator used for contention pressure.
-# Otherwise len(os.sched_getaffinity(0)) is used.
 CONTENTION_CORE_COUNT_ENV = os.environ.get("VLLM_CONTENTION_CORE_COUNT", "").strip()
 
-# A step is considered contention-suspicious if runnable threads exceed available cores,
-# or if CPU utilization is close to the core limit.
 CONTENTION_CPU_UTIL_THRESHOLD = float(os.environ.get("VLLM_CONTENTION_CPU_UTIL_THRESHOLD", "0.85"))
 CONTENTIOUS_TOP_N_THREADS = int(os.environ.get("VLLM_CONTENTION_TOP_N_THREADS", "8"))
-
-# Per-sample thread identity tracing. This is the key output for finding
-# *which* runnable/active threads competed for restricted CPU cores.
-# Rows are written to active_thread_contention_detail.csv.
+.
 TRACE_THREAD_IDENTITIES = os.environ.get("VLLM_TRACE_THREAD_IDENTITIES", "1").lower() in {
     "1", "true", "yes", "on"
 }
@@ -391,8 +380,7 @@ def collect_thread_runtime_snapshot(root_pid: int) -> Dict[Tuple[int, int], dict
                 status = _read_task_status(pid, tid)
                 proc_thread_name = status.get("name", "")
                 python_thread_name = py_thread_names.get(tid, "")
-                # Prefer Python-level name for the current process when available,
-                # but keep the kernel comm field separately.
+
                 thread_name = python_thread_name or proc_thread_name
                 out[(pid, tid)] = {
                     "pid": pid,
@@ -536,9 +524,7 @@ class StepSampler:
 
             vol_delta, invol_delta = _ctx_switch_delta(self._prev_snapshot or {}, snapshot)
 
-            # Per-thread identity rows: this is what lets us answer
-            # "which runnable/active thread caused contention?" rather than only
-            # "which step had contention?".
+
             if TRACE_THREAD_IDENTITIES:
                 prev_snapshot = self._prev_snapshot or {}
                 for key, meta in snapshot.items():
@@ -1183,9 +1169,7 @@ def run_phase(engine, phase_name: str, prompt_specs, measure_threads: bool):
                 set(edge_active_keys) | set(sampler.cpu_active_thread_keys_seen)
             )
 
-            # Backward-compatible 대표 active thread count.
-            # 기존 before/after edge 방식과 sample p90/union 방식을 함께 보고,
-            # 너무 짧은 step에서 한쪽만 0으로 떨어지는 문제를 완화한다.
+
             active_thread_count = max(
                 float(active_thread_count_edge),
                 float(sample_active_thread_count_p90),
@@ -1484,10 +1468,7 @@ def _make_logical_iter_row(req_id, logical_idx, occs):
     iter_wall_ms_max = max(float(o["iter_wall_ms"]) for o in occs)
     iter_gpu_ms_max = max(float(o["iter_gpu_ms"]) for o in occs)
 
-    # 핵심:
-    # non-GPU는 wall-max - gpu-max로 재계산하지 않고,
-    # sitecustomize.py가 같은 rank 안에서 기록한 iter_non_gpu_wall_ms의 rank별 max를 사용한다.
-    # 이렇게 해야 서로 다른 rank의 wall max와 gpu max가 섞이는 문제를 줄일 수 있다.
+
     iter_non_gpu_wall_ms_max = max(
         float(
             o.get(
@@ -1715,8 +1696,7 @@ def build_phase_summary(request_state, df_detail: pd.DataFrame, include_gpu: boo
             "e2e_ms": fmt(e2e_ms, 3),
             "queue_ms": fmt(queue_ms, 3),
 
-            # active phase에서는 request-observed 값을 사용.
-            # gpu phase에서는 아래 include_gpu 블록에서 iteration-derived 값으로 덮어쓴다.
+
             "ttft_ms": fmt(request_observed_ttft_ms, 3),
             "tpot_ms": fmt(request_observed_tpot_ms, 6),
             "tpot_token_count": tpot_token_count,
@@ -2093,9 +2073,6 @@ def build_phase_summary(request_state, df_detail: pd.DataFrame, include_gpu: boo
                     (state["first_token_perf"] - state["submit_perf"]) * 1000.0,
                 )
 
-            # ============================================================
-            # TTFT: prefill logical iteration 기준
-            # ============================================================
 
             ttft_prefill_wall_ms = (
                 sum(float(it["iter_wall_ms_max"]) for it in gpu_prefill)
@@ -2125,9 +2102,7 @@ def build_phase_summary(request_state, df_detail: pd.DataFrame, include_gpu: boo
             ttft_ms_for_report = ttft_prefill_wall_ms
             ttft_non_gpu = ttft_prefill_non_gpu_wall_ms
 
-            # ============================================================
-            # TPOT: decode logical iteration 기준
-            # ============================================================
+
 
             tpot_request_observed_ms = request_observed_tpot_ms
 
@@ -2171,10 +2146,6 @@ def build_phase_summary(request_state, df_detail: pd.DataFrame, include_gpu: boo
 
             tpot_ms_for_report = tpot_decode_wall_ms
 
-            # ============================================================
-            # E2E: 기존 request-level e2e와 GPU total을 함께 둔다.
-            # 추가로 iteration-derived e2e도 diagnostic으로 기록한다.
-            # ============================================================
 
             e2e_gpu_ms = (
                 sum(float(it["iter_gpu_ms_max"]) for it in logical_iters)
@@ -2246,7 +2217,6 @@ def build_phase_summary(request_state, df_detail: pd.DataFrame, include_gpu: boo
                     ),
                     "ttft_gpu_exceeds_prefill_wall": ttft_gpu_exceeds_prefill_wall,
 
-                    # 기존 ttft_ms 컬럼을 phase B에서는 iteration-derived 값으로 덮어씀
                     "ttft_ms": fmt(ttft_ms_for_report, 3),
 
                     # TPOT iteration-derived
@@ -2258,7 +2228,6 @@ def build_phase_summary(request_state, df_detail: pd.DataFrame, include_gpu: boo
                     ),
                     "tpot_gpu_exceeds_decode_wall": tpot_gpu_exceeds_decode_wall,
 
-                    # 기존 tpot_ms 컬럼을 phase B에서는 iteration-derived 값으로 덮어씀
                     "tpot_ms": fmt(tpot_ms_for_report, 6),
 
                     # E2E diagnostic
